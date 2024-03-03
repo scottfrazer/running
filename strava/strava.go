@@ -588,6 +588,7 @@ func NewPostgresDataStore(dsn string) (DataStore, error) {
 
 		`CREATE TABLE IF NOT EXISTS strava_activities (
 			id bigserial primary key,
+			start_time_local timestamptz,
 			value jsonb
 		)`,
 
@@ -597,7 +598,7 @@ func NewPostgresDataStore(dsn string) (DataStore, error) {
 			value jsonb
 		)`,
 
-		`CREATE INDEX IF NOT EXISTS strava_activities_date ON strava_activities ((value->>'start_date_local')::timestamptz DESC)`,
+		`CREATE INDEX IF NOT EXISTS strava_activities_date ON strava_activities (start_date_local DESC)`,
 	}
 
 	for _, query := range queries {
