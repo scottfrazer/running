@@ -564,7 +564,7 @@ func createDirectoryIfNotExists(dirName string) error {
 	}
 
 	if src.Mode().IsRegular() {
-		return fmt.Errorf("Directory %s is a regular file", dirName)
+		return fmt.Errorf("directory %s is a regular file", dirName)
 	}
 
 	return nil
@@ -580,29 +580,31 @@ func NewPostgresDataStore(dsn string) (DataStore, error) {
 		return DataStore{}, err
 	}
 
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS strava_activities (
-		id bigserial primary key,
-		value jsonb
-	)`)
-	if err != nil {
-		return DataStore{}, err
+	queries := []string{
+		`CREATE TABLE IF NOT EXISTS strava_activities (
+			id bigserial primary key,
+			value jsonb
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS strava_activities (
+			id bigserial primary key,
+			value jsonb
+		)`,
+
+		`CREATE TABLE IF NOT EXISTS strava_laps (
+			id bigserial primary key,
+			activity_id text,
+			value jsonb
+		)`,
+
+		`CREATE INDEX IF NOT EXISTS strava_activities_date ON strava_activities ((value->>'start_date_local')::timestamptz DESC)`,
 	}
 
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS strava_session (
-		id bigserial primary key,
-		value jsonb
-	)`)
-	if err != nil {
-		return DataStore{}, err
-	}
-
-	_, err = db.Exec(`CREATE TABLE IF NOT EXISTS strava_laps (
-		id bigserial primary key,
-		activity_id text,
-		value jsonb
-	)`)
-	if err != nil {
-		return DataStore{}, err
+	for _, query := range queries {
+		_, err = db.Exec(query)
+		if err != nil {
+			return DataStore{}, err
+		}
 	}
 
 	return DataStore{db}, nil
@@ -682,6 +684,42 @@ func (s *DataStore) SaveLaps(activityId int64, laps []ActivityLap) error {
 	return nil
 }
 
+func (s *DataStore) activityQuery(query string) ([]SummaryActivity, error) {
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	activities := []SummaryActivity{}
+	for rows.Next() {
+		var value []byte
+		if err := rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		var activity SummaryActivity
+		if err := json.Unmarshal(value, &activity); err != nil {
+			return nil, err
+		}
+		activities = append(activities, activity)
+	}
+	return activities, nil
+}
+
+func (s *DataStore) LoadPage(page, perPage int) ([]SummaryActivity, error) {
+	return s.activityQuery(
+		fmt.Sprintf(`
+			SELECT value
+			FROM strava_activities
+			ORDER BY (value->>'start_date_local')::timestamptz DESC
+			LIMIT %d
+			OFFSET %d`,
+			perPage,
+			(page-1)*perPage,
+		),
+	)
+}
+
 func (s *DataStore) Load(filters ActivityFilter) ([]SummaryActivity, error) {
 	where := []string{}
 
@@ -709,24 +747,7 @@ func (s *DataStore) Load(filters ActivityFilter) ([]SummaryActivity, error) {
 	if len(where) > 0 {
 		query += fmt.Sprintf(" WHERE %s", strings.Join(where, " AND "))
 	}
-	fmt.Printf("%s\n", query)
-	rows, err := s.db.Query(query)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	query += " ORDER BY (value->>'start_date_local')::timestamptz DESC"
 
-	activities := []SummaryActivity{}
-	for rows.Next() {
-		var value []byte
-		if err := rows.Scan(&value); err != nil {
-			return nil, err
-		}
-		var activity SummaryActivity
-		if err := json.Unmarshal(value, &activity); err != nil {
-			return nil, err
-		}
-		activities = append(activities, activity)
-	}
-	return activities, nil
+	return s.activityQuery(query)
 }
